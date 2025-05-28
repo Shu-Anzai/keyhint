@@ -134,3 +134,21 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Docker compose-generated volumes and logs
+docker-compose.override.yml
+docker/*.log
+docker/minio/init_data/*
+docker/localstack/*
+docker/aws-ses-v2-local/*
+
+# IDE
+.vscode/
+.idea/
+*.sw?
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
