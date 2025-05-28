@@ -1,0 +1,118 @@
+version: "3.8"
+networks:
+  sam-network:
+    name: sam-network
+services:
+  db:
+    image: mysql:8.0.27
+    container_name: db
+    ports:
+      - 3306:3306
+    expose:
+      - 3306
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql
+      MYSQL_DATABASE: keyhint
+      MYSQL_USER: mysql
+      MYSQL_PASSWORD: mysql
+    volumes:
+      # - mysql-local:/var/lib/mysql # 名前付きボリュームを使う
+      - ./db/my.cnf:/etc/mysql/conf.d/my.cnf
+      - ./db/initdb.d:/docker-entrypoint-initdb.d
+      - ./db/initdb.d/inital_data:/docker-entrypoint-initdb.d/inital_data
+    tty: true
+    networks:
+      - sam-network
+  phpmyadmin:
+    image: phpmyadmin
+    depends_on:
+      - db
+    environment:
+      - PMA_ARBITRARY=1
+      - PMA_USER=root
+      - PMA_PASSWORD=mysql
+    ports:
+      - "3001:80"
+    networks:
+      - sam-network
+  minio:
+    # NOTE:旧LTS 何かあったときに戻すのでversion情報保持 image: minio/minio:RELEASE.2021-06-17T00-10-46Z
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    container_name: "localS3"
+    ports:
+      - target: 9000
+        published: 9000
+      - target: 9001
+        published: 9001
+    environment:
+      MINIO_ROOT_USER: keyhint_S3 # AWS_ACCESSKEY_IDに対応
+      MINIO_ROOT_PASSWORD: keyhint_S3_pass # AWS_SECRET_ACCESSKEYに対応
+      MINIO_REGION: ap-northeast-1
+    networks:
+      - sam-network
+  mc:
+    image: minio/mc:latest
+    container_name: "keyhint-S3-console"
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: keyhint_S3 # minioと同じユーザー名にすること
+      MINIO_ROOT_PASSWORD: keyhint_S3_pass # minioと同じパスワードにすること
+    entrypoint: sh
+    command: -c
+      "mc alias set keyhint-s3 http://minio:9000 keyhint_S3 keyhint_S3_pass;
+      mc mb keyhint-s3/keyhint;
+      mc cp -r init_data/keyhint/* keyhint-s3/keyhint/;
+      mc policy set public keyhint-s3/keyhint;
+      mc cp -r init_data/keyhint/* keyhint-s3/keyhint/;
+      mc policy set public keyhint-s3/keyhint";
+    volumes:
+      - ./docker/minio/init_data:/init_data
+    networks:
+      - sam-network
+  localstack:
+    image: localstack/localstack
+    container_name: localstack
+    ports:
+      - "127.0.0.1:4566:4566"
+      - "127.0.0.1:4510-4559:4510-4559"
+    environment:
+      - SERVICES=${SERVICES- }
+      - DEBUG=${DEBUG:-0}
+      - DATA_DIR=${DATA_DIR- }
+      - LAMBDA_EXECUTOR=${LAMBDA_EXECUTOR- }
+      - HOST_TMP_FOLDER=${TMPDIR:-/tmp/}localstack
+      - SQS_ENDPOINT_STRATEGY= domain
+    volumes:
+      - locakstack:/var/lib/localstack # 名前付きボリュームを使う
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - ./docker/localstack:/etc/localstack/init/ready.d # キューを用意
+    networks:
+      - sam-network
+  aws-ses-v2-local:
+    build:
+      context: .
+      dockerfile: ./docker/aws-ses-v2-local/Dockerfile
+    container_name: aws-ses-v2-local
+    ports:
+      - "8005:8005"
+    environment:
+      AWS_SES_ACCOUNT: '{"SendQuota":{"Max24HourSend":1000000,"MaxSendRate":250,"SentLast24Hours":0}}'
+      SMTP_TRANSPORT: '{"host":"smtp","port":25,"secure":false}'
+    networks:
+      - sam-network
+  frontend:
+    image: node:20-alpine
+    container_name: keyhint-frontend
+    working_dir: /app
+    volumes:
+      - ../keyhint:/app        # プロジェクトソースのパスに合わせて修正
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev"
+    networks:
+      - sam-network
+
+volumes:
+  localstack:
